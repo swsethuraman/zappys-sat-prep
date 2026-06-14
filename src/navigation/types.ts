@@ -1,6 +1,12 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 import type { ConceptId } from '../data/concepts';
 
+// Auth flow — shown when no user is signed in.
+export type AuthStackParamList = {
+  SignIn: undefined;
+  SignUp: undefined;
+};
+
 // Onboarding/diagnostic flow — shown before a user has a profile.
 export type OnboardingStackParamList = {
   Welcome: undefined;

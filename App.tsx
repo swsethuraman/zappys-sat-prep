@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DarkTheme, Theme } from '@react-navigation/native';
 import RootNavigator from './src/navigation/RootNavigator';
 import { useZappyFonts } from './src/theme/fonts';
+import { AuthProvider } from './src/context/AuthContext';
 import { ProgressProvider, useProgress } from './src/context/ProgressContext';
 import { colors } from './src/theme/colors';
 
@@ -45,8 +46,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ProgressProvider>
-      <AppContent />
-    </ProgressProvider>
+    <AuthProvider>
+      <ProgressProvider>
+        <AppContent />
+      </ProgressProvider>
+    </AuthProvider>
   );
 }

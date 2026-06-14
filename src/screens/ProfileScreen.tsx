@@ -5,6 +5,7 @@ import type { MainTabParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader, Card, Eyebrow, Button, NumberField } from '../components/ui';
 import { useProgress } from '../context/ProgressContext';
+import { useAuth } from '../context/AuthContext';
 import { colors, fonts, fontSizes, spacing } from '../theme/colors';
 
 type Props = BottomTabScreenProps<MainTabParamList, 'Profile'>;
@@ -20,6 +21,7 @@ function clampToStep(raw: number): number {
 
 export default function ProfileScreen(_props: Props) {
   const { progress, setTargetScore, setActualScore, reset } = useProgress();
+  const { signOut } = useAuth();
 
   const [targetText, setTargetText] = useState(String(progress?.targetScore ?? 1200));
   const [actualText, setActualText] = useState(progress?.actualScore ? String(progress.actualScore) : '');
@@ -100,6 +102,11 @@ export default function ProfileScreen(_props: Props) {
         <Eyebrow>Reset</Eyebrow>
         <Text style={styles.body}>Start over from scratch — clears mastery, history, and scores.</Text>
         <Button title="Reset all progress" variant="ghost" onPress={handleReset} />
+      </Card>
+
+      <Card>
+        <Eyebrow>Account</Eyebrow>
+        <Button title="Sign out" variant="ghost" onPress={() => signOut().catch(() => {})} />
       </Card>
     </Screen>
   );

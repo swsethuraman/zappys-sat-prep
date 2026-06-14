@@ -46,6 +46,25 @@ function mapAllConcepts<T>(value: T): Record<ConceptId, T> {
   return result;
 }
 
+/**
+ * Returns all UserProgress fields except `history`, ready to write to
+ * Firestore (where history lives as a subcollection, not an array field).
+ */
+export function userDocFields(p: UserProgress): Omit<UserProgress, 'history'> {
+  return {
+    mastery: p.mastery,
+    lastSeen: p.lastSeen,
+    poolIndex: p.poolIndex,
+    sessionCount: p.sessionCount,
+    targetScore: p.targetScore,
+    baselineScore: p.baselineScore,
+    currentScore: p.currentScore,
+    diagnosticDone: p.diagnosticDone,
+    actualScore: p.actualScore,
+    actualDate: p.actualDate,
+  };
+}
+
 /** A fresh profile for a brand-new user, before the diagnostic runs. */
 export function createInitialProgress(targetScore = 1200): UserProgress {
   return {
