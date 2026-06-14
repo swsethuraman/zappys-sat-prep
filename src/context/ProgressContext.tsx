@@ -47,6 +47,7 @@ function progressFromDoc(data: DocumentData): Omit<UserProgress, 'history'> {
     diagnosticDone: (data['diagnosticDone'] ?? false) as boolean,
     actualScore: (data['actualScore'] ?? null) as number | null,
     actualDate: (data['actualDate'] ?? null) as string | null,
+    scheduledSAT: (data['scheduledSAT'] ?? null) as string | null,
   };
 }
 
@@ -70,6 +71,7 @@ interface ProgressContextValue {
   completeSession: (answers: SessionAnswer[]) => { delta: number; justExceeded: boolean };
   raiseTarget: (score: number) => void;
   setActualScore: (score: number, date: string) => void;
+  setScheduledSAT: (date: string | null) => void;
   /** Persist updated pool cursors after buildSession() advances them. */
   setPoolIndex: (poolIndex: UserProgress['poolIndex']) => void;
   /** Wipes all progress and starts over (Profile screen "Reset Zappy"). */
@@ -239,6 +241,14 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
         updateDoc(doc(db, 'users', uid), {
           actualScore: score,
           actualDate: date,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      },
+
+      setScheduledSAT: (date) => {
+        if (!uid) return;
+        updateDoc(doc(db, 'users', uid), {
+          scheduledSAT: date,
           updatedAt: serverTimestamp(),
         }).catch(() => {});
       },

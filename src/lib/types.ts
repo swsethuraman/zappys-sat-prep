@@ -34,6 +34,8 @@ export interface UserProgress {
   diagnosticDone: boolean;
   actualScore: number | null;
   actualDate: string | null;
+  /** ISO date string ("YYYY-MM-DD") of the user's scheduled SAT, or null. */
+  scheduledSAT: string | null;
 }
 
 const DEFAULT_MASTERY = 0.3;
@@ -62,6 +64,7 @@ export function userDocFields(p: UserProgress): Omit<UserProgress, 'history'> {
     diagnosticDone: p.diagnosticDone,
     actualScore: p.actualScore,
     actualDate: p.actualDate,
+    scheduledSAT: p.scheduledSAT,
   };
 }
 
@@ -79,5 +82,6 @@ export function createInitialProgress(targetScore = 1200): UserProgress {
     diagnosticDone: false,
     actualScore: null,
     actualDate: null,
+    scheduledSAT: null,
   };
 }

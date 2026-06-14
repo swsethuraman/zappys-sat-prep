@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
-import { Alert, Text, StyleSheet, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
+import { captureRef } from 'react-native-view-shot';
+import * as Sharing from 'expo-sharing';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader, Card, Eyebrow, Button, NumberField } from '../components/ui';
+import ShareCard from '../components/ShareCard';
 import { useProgress } from '../context/ProgressContext';
 import { useAuth } from '../context/AuthContext';
 import { colors, fonts, fontSizes, spacing } from '../theme/colors';
@@ -25,6 +28,21 @@ export default function ProfileScreen(_props: Props) {
 
   const [targetText, setTargetText] = useState(String(progress?.targetScore ?? 1200));
   const [actualText, setActualText] = useState(progress?.actualScore ? String(progress.actualScore) : '');
+  const shareCardRef = useRef<View>(null);
+
+  const handleShare = async () => {
+    try {
+      const uri = await captureRef(shareCardRef, { format: 'png', quality: 0.95 });
+      const available = await Sharing.isAvailableAsync();
+      if (available) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share my SAT results' });
+      } else {
+        Alert.alert('Sharing', 'Sharing is not available on this device.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not capture or share your results.');
+    }
+  };
 
   if (!progress) {
     return (
@@ -98,6 +116,27 @@ export default function ProfileScreen(_props: Props) {
         {progress.actualDate && <Text style={styles.note}>Logged on {progress.actualDate}.</Text>}
       </Card>
 
+      {progress.actualScore !== null && progress.baselineScore !== null && (
+        <Card>
+          <Eyebrow>Share your results</Eyebrow>
+          <ShareCard
+            ref={shareCardRef}
+            baselineScore={progress.baselineScore}
+            targetScore={progress.targetScore}
+            currentScore={progress.currentScore}
+            actualScore={progress.actualScore}
+            actualDate={progress.actualDate}
+          />
+          {Platform.OS === 'web' ? (
+            <Text style={styles.shareWebNote}>
+              ⚡ Sharing is available on the Zappy mobile app.
+            </Text>
+          ) : (
+            <Button title="Share my results ⚡" variant="mint" onPress={handleShare} />
+          )}
+        </Card>
+      )}
+
       <Card>
         <Eyebrow>Reset</Eyebrow>
         <Text style={styles.body}>Start over from scratch — clears mastery, history, and scores.</Text>
@@ -142,5 +181,12 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.sm,
     color: colors.muted,
     marginTop: spacing.sm,
+  },
+  shareWebNote: {
+    fontFamily: fonts.body,
+    fontSize: fontSizes.sm,
+    color: colors.mint,
+    marginTop: spacing.sm,
+    textAlign: 'center',
   },
 });
