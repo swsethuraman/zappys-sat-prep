@@ -8,6 +8,7 @@ import OnboardingNavigator from './OnboardingNavigator';
 import MainTabs from './MainTabs';
 import SessionScreen from '../screens/SessionScreen';
 import SessionSummaryScreen from '../screens/SessionSummaryScreen';
+import LessonScreen from '../screens/LessonScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -38,6 +39,7 @@ export default function RootNavigator() {
         component={SessionSummaryScreen}
         options={{ presentation: 'fullScreenModal' }}
       />
+      <Stack.Screen name="Lesson" component={LessonScreen} />
     </Stack.Navigator>
   );
 }

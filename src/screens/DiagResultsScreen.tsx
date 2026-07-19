@@ -1,20 +1,33 @@
 import React from 'react';
-import { Text, StyleSheet } from 'react-native';
+import { Pressable, Text, StyleSheet, View } from 'react-native';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { OnboardingStackParamList, RootStackParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader, Card, Eyebrow, Button } from '../components/ui';
 import MasteryBar from '../components/MasteryBar';
-import { CONCEPTS, MATH_CONCEPTS, RW_CONCEPTS } from '../data/concepts';
+import { CONCEPTS, MATH_CONCEPTS, RW_CONCEPTS, type ConceptId } from '../data/concepts';
 import { sectionScore, sortByMastery } from '../lib/scoring';
 import { useProgress } from '../context/ProgressContext';
-import { colors, fonts, fontSizes } from '../theme/colors';
+import { colors, fonts, fontSizes, spacing } from '../theme/colors';
 
 type Props = CompositeScreenProps<
   NativeStackScreenProps<OnboardingStackParamList, 'DiagResults'>,
   NativeStackScreenProps<RootStackParamList>
 >;
+
+function LearnLink({ concept, navigation }: { concept: ConceptId; navigation: Props['navigation'] }) {
+  return (
+    <Pressable
+      onPress={() => navigation.navigate('Lesson', { concept })}
+      style={({ pressed }) => [styles.learnLink, pressed && styles.learnLinkPressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`Learn ${CONCEPTS[concept].short}`}
+    >
+      <Text style={styles.learnLinkText}>Learn</Text>
+    </Pressable>
+  );
+}
 
 export default function DiagResultsScreen({ navigation }: Props) {
   const { progress } = useProgress();
@@ -63,7 +76,14 @@ export default function DiagResultsScreen({ navigation }: Props) {
             m < 0.4 && prereq && progress.mastery[prereq] < 0.6
               ? `Often linked to ${CONCEPTS[prereq].short} — Zappy will check that first.`
               : undefined;
-          return <MasteryBar key={concept} concept={concept} mastery={m} showLabel note={note} />;
+          return (
+            <View key={concept} style={styles.masteryRow}>
+              <View style={styles.masteryBarWrap}>
+                <MasteryBar concept={concept} mastery={m} showLabel note={note} />
+              </View>
+              <LearnLink concept={concept} navigation={navigation} />
+            </View>
+          );
         })}
       </Card>
       <Card>
@@ -97,5 +117,30 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.md,
     color: colors.muted,
     lineHeight: 22,
+  },
+  masteryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  masteryBarWrap: {
+    flex: 1,
+  },
+  learnLink: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.mint,
+    marginBottom: spacing.md,
+    marginLeft: spacing.sm,
+  },
+  learnLinkPressed: {
+    opacity: 0.6,
+  },
+  learnLinkText: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fontSizes.xs,
+    color: colors.mint,
+    letterSpacing: 0.5,
   },
 });

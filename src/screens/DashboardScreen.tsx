@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text, StyleSheet, View } from 'react-native';
+import { Pressable, Text, StyleSheet, View } from 'react-native';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -9,7 +9,7 @@ import { BrandHeader, Card, Eyebrow, Button } from '../components/ui';
 import ChargeMeter from '../components/ChargeMeter';
 import ScoreTrajectory from '../components/ScoreTrajectory';
 import MasteryBar from '../components/MasteryBar';
-import { CONCEPTS, MATH_CONCEPTS, RW_CONCEPTS } from '../data/concepts';
+import { CONCEPTS, MATH_CONCEPTS, RW_CONCEPTS, type ConceptId } from '../data/concepts';
 import { sectionScore, sortByMastery } from '../lib/scoring';
 import { projectSessionGain } from '../lib/sessionBuilder';
 import { useProgress } from '../context/ProgressContext';
@@ -22,6 +22,19 @@ type Props = CompositeScreenProps<
 
 const STEP = 10;
 const MAX_SCORE = 1600;
+
+function LearnLink({ concept, navigation }: { concept: ConceptId; navigation: Props['navigation'] }) {
+  return (
+    <Pressable
+      onPress={() => navigation.navigate('Lesson', { concept })}
+      style={({ pressed }) => [styles.learnLink, pressed && styles.learnLinkPressed]}
+      accessibilityRole="button"
+      accessibilityLabel={`Learn ${CONCEPTS[concept].short}`}
+    >
+      <Text style={styles.learnLinkText}>Learn</Text>
+    </Pressable>
+  );
+}
 
 export default function DashboardScreen({ navigation }: Props) {
   const { progress, raiseTarget } = useProgress();
@@ -92,7 +105,12 @@ export default function DashboardScreen({ navigation }: Props) {
       <Card>
         <Eyebrow>Current focus areas</Eyebrow>
         {weakest.slice(0, 3).map((c) => (
-          <MasteryBar key={c} concept={c} mastery={progress.mastery[c]} />
+          <View key={c} style={styles.masteryRow}>
+            <View style={styles.masteryBarWrap}>
+              <MasteryBar concept={c} mastery={progress.mastery[c]} />
+            </View>
+            <LearnLink concept={c} navigation={navigation} />
+          </View>
         ))}
       </Card>
 
@@ -149,6 +167,31 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.line,
     marginVertical: spacing.md,
+  },
+  masteryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  masteryBarWrap: {
+    flex: 1,
+  },
+  learnLink: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.mint,
+    marginBottom: spacing.md,
+    marginLeft: spacing.sm,
+  },
+  learnLinkPressed: {
+    opacity: 0.6,
+  },
+  learnLinkText: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: fontSizes.xs,
+    color: colors.mint,
+    letterSpacing: 0.5,
   },
   banner: {
     backgroundColor: 'rgba(255,210,63,0.10)',

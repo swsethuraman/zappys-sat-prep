@@ -37,4 +37,5 @@ export type RootStackParamList = {
     touchedConcepts: ConceptId[];
     justExceeded: boolean;
   };
+  Lesson: { concept: ConceptId };
 };
