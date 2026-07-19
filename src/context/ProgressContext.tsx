@@ -12,17 +12,20 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from './AuthContext';
 import {
   applyDiagnosticResults,
   applySessionResults,
+  recordSeenQuestions,
   type SessionAnswer,
 } from '../lib/sessionBuilder';
 import type { ConceptId } from '../data/concepts';
 import {
   createInitialProgress,
+  toSeenQuestions,
   userDocFields,
   type MasteryMap,
   type LastSeenMap,
@@ -48,6 +51,9 @@ function progressFromDoc(data: DocumentData): Omit<UserProgress, 'history'> {
     actualScore: (data['actualScore'] ?? null) as number | null,
     actualDate: (data['actualDate'] ?? null) as string | null,
     scheduledSAT: (data['scheduledSAT'] ?? null) as string | null,
+    // Pre-field docs won't have `seenQuestions`; default missing/malformed
+    // entries to empty per concept so existing users load without error (F6).
+    seenQuestions: toSeenQuestions(data['seenQuestions']),
   };
 }
 
@@ -72,8 +78,6 @@ interface ProgressContextValue {
   raiseTarget: (score: number) => void;
   setActualScore: (score: number, date: string) => void;
   setScheduledSAT: (date: string | null) => void;
-  /** Persist updated pool cursors after buildSession() advances them. */
-  setPoolIndex: (poolIndex: UserProgress['poolIndex']) => void;
   /** Wipes all progress and starts over (Profile screen "Reset Zappy"). */
   reset: () => void;
 }
@@ -216,15 +220,23 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
       completeSession: (answers) => {
         if (!uid || !progress) return { delta: 0, justExceeded: false };
         const { progress: updated, delta, justExceeded } = applySessionResults(progress, answers);
-        updateDoc(doc(db, 'users', uid), progressToDoc(updated)).catch(() => {});
-        const entry = updated.history[updated.history.length - 1];
+        // Fold this session's served pool questions into the seen-set once,
+        // here, so it's persisted with the same write as the score/history.
+        const served = answers.map((a) => ({ concept: a.concept, questionId: a.questionId }));
+        const withSeen = {
+          ...updated,
+          seenQuestions: recordSeenQuestions(updated.seenQuestions, served),
+        };
+        // Atomically persist the user doc and the new history entry (F8 / D2).
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'users', uid), progressToDoc(withSeen));
+        const entry = withSeen.history[withSeen.history.length - 1];
         if (entry) {
-          addDoc(collection(db, 'users', uid, 'history'), {
-            ...entry,
-            createdAt: serverTimestamp(),
-          }).catch(() => {});
+          const historyRef = doc(collection(db, 'users', uid, 'history'));
+          batch.set(historyRef, { ...entry, createdAt: serverTimestamp() });
         }
-        setHistory(updated.history);
+        batch.commit().catch(() => {});
+        setHistory(withSeen.history);
         return { delta, justExceeded };
       },
 
@@ -249,14 +261,6 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
         if (!uid) return;
         updateDoc(doc(db, 'users', uid), {
           scheduledSAT: date,
-          updatedAt: serverTimestamp(),
-        }).catch(() => {});
-      },
-
-      setPoolIndex: (poolIndex) => {
-        if (!uid) return;
-        updateDoc(doc(db, 'users', uid), {
-          poolIndex,
           updatedAt: serverTimestamp(),
         }).catch(() => {});
       },

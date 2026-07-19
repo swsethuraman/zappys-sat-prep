@@ -21,36 +21,125 @@ import {
   updateMastery,
   weakestConcept,
 } from './scoring';
-import type { MasteryMap, PoolIndexMap, SessionHistoryEntry, UserProgress } from './types';
-
-/** Practice-session question pool: indices 1 (difficulty 1) and 3 (difficulty 3), cycling. */
-const SESSION_POOL = [1, 3] as const;
+import type { MasteryMap, SeenQuestionsMap, SessionHistoryEntry, UserProgress } from './types';
 
 export type SessionItemKind = 'warmup' | 'prereq' | 'main';
 
 export interface SessionQueueItem {
   concept: ConceptId;
-  /** Index into QUESTIONS[concept] (0-3). */
-  qi: number;
+  /** Stable ID of the selected question (see questions.ts). */
+  questionId: string;
   kind: SessionItemKind;
 }
 
 export interface SessionAnswer {
   concept: ConceptId;
+  /** Stable ID of the question that was served. */
+  questionId: string;
   correct: boolean;
   kind: SessionItemKind;
 }
 
 export interface BuiltSession {
   queue: SessionQueueItem[];
-  /** Updated pool cursors — persist these back onto UserProgress.poolIndex. */
-  poolIndex: PoolIndexMap;
 }
 
-function nextPoolQuestion(poolIndex: PoolIndexMap, concept: ConceptId): { qi: number; poolIndex: PoolIndexMap } {
-  const cursor = poolIndex[concept] ?? 0;
-  const qi = SESSION_POOL[cursor % SESSION_POOL.length];
-  return { qi, poolIndex: { ...poolIndex, [concept]: cursor + 1 } };
+// ---------------------------------------------------------------------
+// Pool selection (ID-based seen-question tracking, supersedes poolIndex)
+// ---------------------------------------------------------------------
+
+/** The pool (non-diagnostic) question IDs for a concept, in bank order. */
+export function poolQuestionIds(concept: ConceptId): string[] {
+  return QUESTIONS[concept].filter((q) => !q.diagnostic).map((q) => q.id);
+}
+
+export interface PoolSelection {
+  /** Chosen question IDs (length = requested count, all distinct). */
+  ids: string[];
+  /** True if the unseen pool was exhausted and already-seen IDs were reused. */
+  recycled: boolean;
+}
+
+/**
+ * Picks `count` distinct pool questions for a concept, preferring ones whose
+ * ID is not in `seenIds`. Diagnostic questions are never eligible (F1/F3).
+ * When the unseen pool is too small, it recycles: unseen IDs first, then the
+ * already-seen remainder, so an exhausted pool still returns a full, mostly
+ * non-repeating set (F7). `count` is expected to be well under the pool size.
+ */
+export function selectPoolQuestions(
+  concept: ConceptId,
+  count: number,
+  seenIds: readonly string[],
+  rng: () => number = Math.random,
+): PoolSelection {
+  const pool = QUESTIONS[concept].filter((q) => !q.diagnostic);
+  const seen = new Set(seenIds);
+  const unseen = pool.filter((q) => !seen.has(q.id));
+
+  if (unseen.length >= count) {
+    return { ids: shuffle(unseen, rng).slice(0, count).map((q) => q.id), recycled: false };
+  }
+
+  const seenPool = pool.filter((q) => seen.has(q.id));
+  const ordered = [...shuffle(unseen, rng), ...shuffle(seenPool, rng)];
+  return { ids: ordered.slice(0, count).map((q) => q.id), recycled: true };
+}
+
+/**
+ * Folds a completed session's served question IDs into the per-concept
+ * seen-set. Appends (deduped) per concept; when a concept's seen-set would
+ * cover its entire pool, it recycles — resetting that concept to only this
+ * session's IDs so the next session sees a full unseen pool again (F7).
+ */
+export function recordSeenQuestions(
+  seen: SeenQuestionsMap,
+  served: { concept: ConceptId; questionId: string }[],
+): SeenQuestionsMap {
+  const byConcept: Partial<Record<ConceptId, string[]>> = {};
+  served.forEach(({ concept, questionId }) => {
+    (byConcept[concept] ??= []).push(questionId);
+  });
+
+  const next: SeenQuestionsMap = { ...seen };
+  (Object.keys(byConcept) as ConceptId[]).forEach((concept) => {
+    const poolIds = poolQuestionIds(concept);
+    const poolSet = new Set(poolIds);
+    // Only pool questions are tracked; diagnostic/unknown IDs are ignored (F3).
+    const servedIds = (byConcept[concept] ?? []).filter((id) => poolSet.has(id));
+    if (servedIds.length === 0) return;
+    const merged = Array.from(new Set([...(seen[concept] ?? []), ...servedIds]));
+    next[concept] = merged.length >= poolIds.length ? Array.from(new Set(servedIds)) : merged;
+  });
+  return next;
+}
+
+/**
+ * Assigns distinct pool questions to a list of (concept, kind) slots, drawing
+ * from each concept's unseen pool. Multiple slots for the same concept get
+ * distinct questions within a single session.
+ */
+function assignQuestions(
+  slots: { concept: ConceptId; kind: SessionItemKind }[],
+  seen: SeenQuestionsMap,
+  rng: () => number = Math.random,
+): SessionQueueItem[] {
+  const need: Partial<Record<ConceptId, number>> = {};
+  slots.forEach(({ concept }) => {
+    need[concept] = (need[concept] ?? 0) + 1;
+  });
+
+  const idsByConcept: Partial<Record<ConceptId, string[]>> = {};
+  (Object.keys(need) as ConceptId[]).forEach((concept) => {
+    idsByConcept[concept] = selectPoolQuestions(concept, need[concept] ?? 0, seen[concept] ?? [], rng).ids;
+  });
+
+  const cursor: Partial<Record<ConceptId, number>> = {};
+  return slots.map(({ concept, kind }) => {
+    const i = cursor[concept] ?? 0;
+    cursor[concept] = i + 1;
+    return { concept, questionId: (idsByConcept[concept] ?? [])[i], kind };
+  });
 }
 
 /**
@@ -75,32 +164,22 @@ export function conceptsByRecency(progress: Pick<UserProgress, 'mastery' | 'last
  *     insert one refresher question on it.
  *  3. Main set — 2 questions on the weakest concept itself.
  */
-export function buildSession(progress: UserProgress): BuiltSession {
-  let poolIndex = progress.poolIndex;
-  const queue: SessionQueueItem[] = [];
+export function buildSession(progress: UserProgress, rng: () => number = Math.random): BuiltSession {
+  const slots: { concept: ConceptId; kind: SessionItemKind }[] = [];
 
   const warmupConcepts = conceptsByRecency(progress).slice(0, 2);
-  warmupConcepts.forEach((concept) => {
-    const next = nextPoolQuestion(poolIndex, concept);
-    poolIndex = next.poolIndex;
-    queue.push({ concept, qi: next.qi, kind: 'warmup' });
-  });
+  warmupConcepts.forEach((concept) => slots.push({ concept, kind: 'warmup' }));
 
   const target = weakestConcept(progress.mastery);
   const prereq = CONCEPTS[target].prereq;
   if (prereq && progress.mastery[prereq] < 0.6 && !warmupConcepts.includes(prereq)) {
-    const next = nextPoolQuestion(poolIndex, prereq);
-    poolIndex = next.poolIndex;
-    queue.push({ concept: prereq, qi: next.qi, kind: 'prereq' });
+    slots.push({ concept: prereq, kind: 'prereq' });
   }
 
-  for (let i = 0; i < 2; i++) {
-    const next = nextPoolQuestion(poolIndex, target);
-    poolIndex = next.poolIndex;
-    queue.push({ concept: target, qi: next.qi, kind: 'main' });
-  }
+  slots.push({ concept: target, kind: 'main' });
+  slots.push({ concept: target, kind: 'main' });
 
-  return { queue, poolIndex };
+  return { queue: assignQuestions(slots, progress.seenQuestions, rng) };
 }
 
 export interface ProjectedGain {
@@ -157,19 +236,21 @@ export function projectSessionGain(progress: UserProgress): ProjectedGain {
 
 export interface DiagnosticQueueItem {
   concept: ConceptId;
-  qi: number;
+  questionId: string;
 }
 
 /**
- * The 16-question diagnostic: questions at index 0 (difficulty 1) and
- * index 2 (difficulty 2) for every concept, in a fixed (unshuffled) order.
- * Shuffle separately if desired — kept deterministic here for testability.
+ * The 16-question diagnostic: the two questions flagged `diagnostic` for
+ * every concept (in bank order), in a fixed (unshuffled) concept order.
+ * Derived by filtering the flag — never by array position (HN-09). Shuffle
+ * separately if desired; kept deterministic here for testability.
  */
 export function buildDiagnosticQueue(): DiagnosticQueueItem[] {
   const queue: DiagnosticQueueItem[] = [];
   ALL_CONCEPTS.forEach((concept) => {
-    queue.push({ concept, qi: 0 });
-    queue.push({ concept, qi: 2 });
+    QUESTIONS[concept]
+      .filter((q) => q.diagnostic)
+      .forEach((q) => queue.push({ concept, questionId: q.id }));
   });
   return queue;
 }
@@ -275,6 +356,20 @@ export function applySessionResults(progress: UserProgress, answers: SessionAnsw
     delta,
     justExceeded,
   };
+}
+
+/**
+ * Builds a focused 4-question session targeting a single concept, drawing
+ * distinct unseen questions from that concept's pool.
+ * Used by LessonScreen's "Practice this topic" button.
+ */
+export function buildFocusedSession(
+  progress: UserProgress,
+  concept: ConceptId,
+  rng: () => number = Math.random,
+): BuiltSession {
+  const slots = Array.from({ length: 4 }, () => ({ concept, kind: 'main' as const }));
+  return { queue: assignQuestions(slots, progress.seenQuestions, rng) };
 }
 
 // Re-export for screens that only need question lookups alongside session

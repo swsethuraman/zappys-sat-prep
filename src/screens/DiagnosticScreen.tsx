@@ -5,7 +5,7 @@ import Screen from '../components/Screen';
 import { BrandHeader } from '../components/ui';
 import QuestionCard from '../components/QuestionCard';
 import { CONCEPTS } from '../data/concepts';
-import { getQuestion } from '../data/questions';
+import { getQuestionById } from '../data/questions';
 import { buildDiagnosticQueue, shuffle, type DiagnosticQueueItem } from '../lib/sessionBuilder';
 import { useProgress } from '../context/ProgressContext';
 
@@ -25,7 +25,7 @@ export default function DiagnosticScreen({ navigation }: Props) {
   const [answers, setAnswers] = useState<AnswerRecord[]>([]);
 
   const item = queue[index];
-  const question = getQuestion(item.concept, item.qi);
+  const question = getQuestionById(item.questionId);
   const total = queue.length;
 
   const handleAnswered = (correct: boolean) => {

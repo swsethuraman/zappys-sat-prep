@@ -1,31 +1,39 @@
 import { ALL_CONCEPTS, CONCEPTS } from '../../data/concepts';
-import { QUESTIONS } from '../../data/questions';
+import { getQuestionById } from '../../data/questions';
 import { totalScore } from '../scoring';
 import {
   applyDiagnosticResults,
   applySessionResults,
   buildDiagnosticQueue,
+  buildFocusedSession,
   buildSession,
   conceptsByRecency,
+  poolQuestionIds,
   projectSessionGain,
+  recordSeenQuestions,
+  selectPoolQuestions,
   shuffle,
 } from '../sessionBuilder';
-import { createInitialProgress } from '../types';
+import { createInitialProgress, emptySeenQuestions } from '../types';
 
 describe('buildDiagnosticQueue', () => {
-  it('contains 2 questions (indices 0 and 2) for every concept', () => {
+  it('contains the 2 diagnostic-flagged questions for every concept', () => {
     const queue = buildDiagnosticQueue();
     expect(queue).toHaveLength(ALL_CONCEPTS.length * 2);
     ALL_CONCEPTS.forEach((concept) => {
       const items = queue.filter((q) => q.concept === concept);
-      expect(items.map((i) => i.qi).sort()).toEqual([0, 2]);
+      expect(items).toHaveLength(2);
+      items.forEach((i) => {
+        const q = getQuestionById(i.questionId);
+        expect(q.concept).toBe(concept);
+        expect(q.diagnostic).toBe(true);
+      });
     });
   });
 
-  it('every referenced question exists in the question bank', () => {
-    const queue = buildDiagnosticQueue();
-    queue.forEach(({ concept, qi }) => {
-      expect(QUESTIONS[concept][qi]).toBeDefined();
+  it('only ever references diagnostic questions (never pool)', () => {
+    buildDiagnosticQueue().forEach(({ questionId }) => {
+      expect(getQuestionById(questionId).diagnostic).toBe(true);
     });
   });
 });
@@ -160,24 +168,25 @@ describe('buildSession', () => {
     expect(queue.some((q) => q.kind === 'prereq')).toBe(false);
   });
 
-  it('cycles the practice pool between question indices 1 and 3', () => {
+  it('draws two distinct non-diagnostic questions for the weakest concept', () => {
     const progress = createInitialProgress();
     progress.mastery.geometry = 0.05;
-    // Keep geometry out of the warm-up slot (which would also be drawn
-    // toward it as the lowest-mastery concept) so the "main" qis below
-    // reflect only the target-concept pool cursor.
+    // Keep geometry out of the warm-up slot so the "main" items below reflect
+    // only the target-concept draw.
     progress.sessionCount = 1;
     progress.lastSeen.geometry = 1;
 
-    const first = buildSession(progress);
-    const mainQis = first.queue.filter((q) => q.kind === 'main').map((q) => q.qi);
-    expect(mainQis).toEqual([1, 3]);
+    const { queue } = buildSession(progress);
+    const mains = queue.filter((q) => q.kind === 'main');
+    expect(mains).toHaveLength(2);
 
-    const progress2 = { ...progress, poolIndex: first.poolIndex };
-    const second = buildSession(progress2);
-    const mainQis2 = second.queue.filter((q) => q.kind === 'main').map((q) => q.qi);
-    // cursor continues cycling: started at 2 -> [1,3] again
-    expect(mainQis2).toEqual([1, 3]);
+    const ids = mains.map((m) => m.questionId);
+    expect(new Set(ids).size).toBe(2); // distinct within the session
+    mains.forEach((m) => {
+      const q = getQuestionById(m.questionId);
+      expect(q.concept).toBe('geometry');
+      expect(q.diagnostic).toBe(false);
+    });
   });
 });
 
@@ -217,8 +226,8 @@ describe('applySessionResults', () => {
     );
 
     const { progress: next, delta } = applySessionResults(progress, [
-      { concept: 'geometry', correct: true, kind: 'main' },
-      { concept: 'geometry', correct: true, kind: 'main' },
+      { concept: 'geometry', questionId: 'geometry-p1', correct: true, kind: 'main' },
+      { concept: 'geometry', questionId: 'geometry-p2', correct: true, kind: 'main' },
     ]);
 
     expect(next.sessionCount).toBe(1);
@@ -231,7 +240,7 @@ describe('applySessionResults', () => {
   it('marks touched concepts as seen at the new session number', () => {
     const progress = createInitialProgress();
     const { progress: next } = applySessionResults(progress, [
-      { concept: 'linear', correct: true, kind: 'warmup' },
+      { concept: 'linear', questionId: 'linear-p1', correct: true, kind: 'warmup' },
     ]);
     expect(next.lastSeen.linear).toBe(1);
     expect(next.lastSeen.quad).toBe(0); // untouched
@@ -243,8 +252,8 @@ describe('applySessionResults', () => {
     progress.mastery = Object.fromEntries(ALL_CONCEPTS.map((c) => [c, 0.05])) as typeof progress.mastery;
 
     const { justExceeded } = applySessionResults(progress, [
-      { concept: 'linear', correct: true, kind: 'main' },
-      { concept: 'linear', correct: true, kind: 'main' },
+      { concept: 'linear', questionId: 'linear-p1', correct: true, kind: 'main' },
+      { concept: 'linear', questionId: 'linear-p2', correct: true, kind: 'main' },
     ]);
     expect(justExceeded).toBe(true);
   });
@@ -255,8 +264,91 @@ describe('applySessionResults', () => {
     progress.mastery = Object.fromEntries(ALL_CONCEPTS.map((c) => [c, 0.5])) as typeof progress.mastery;
 
     const { justExceeded } = applySessionResults(progress, [
-      { concept: 'linear', correct: true, kind: 'main' },
+      { concept: 'linear', questionId: 'linear-p1', correct: true, kind: 'main' },
     ]);
     expect(justExceeded).toBe(false);
+  });
+});
+
+describe('selectPoolQuestions', () => {
+  it('never returns diagnostic questions', () => {
+    const { ids } = selectPoolQuestions('linear', 6, []);
+    ids.forEach((id) => expect(getQuestionById(id).diagnostic).toBe(false));
+  });
+
+  it('returns the requested count of distinct unseen ids', () => {
+    const { ids, recycled } = selectPoolQuestions('linear', 4, []);
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+    expect(recycled).toBe(false);
+  });
+
+  it('excludes already-seen ids when enough unseen remain', () => {
+    const pool = poolQuestionIds('linear');
+    const seen = pool.slice(0, 20);
+    const { ids, recycled } = selectPoolQuestions('linear', 4, seen);
+    ids.forEach((id) => expect(seen).not.toContain(id));
+    expect(recycled).toBe(false);
+  });
+
+  it('recycles when the whole pool is seen, still returning a full distinct set', () => {
+    const pool = poolQuestionIds('linear'); // every pool id already seen
+    const { ids, recycled } = selectPoolQuestions('linear', 4, pool);
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+    expect(recycled).toBe(true);
+    ids.forEach((id) => expect(getQuestionById(id).diagnostic).toBe(false));
+  });
+
+  it('serves the last unseen id before repeating any seen one', () => {
+    const pool = poolQuestionIds('linear');
+    const seen = pool.slice(0, pool.length - 1); // exactly one unseen left
+    const lastUnseen = pool[pool.length - 1];
+    const { ids } = selectPoolQuestions('linear', 4, seen);
+    expect(ids).toContain(lastUnseen);
+  });
+});
+
+describe('recordSeenQuestions', () => {
+  it('appends served pool ids per concept, deduped, leaving others untouched', () => {
+    const next = recordSeenQuestions(emptySeenQuestions(), [
+      { concept: 'linear', questionId: 'linear-p1' },
+      { concept: 'linear', questionId: 'linear-p1' }, // duplicate
+      { concept: 'quad', questionId: 'quad-p3' },
+    ]);
+    expect(next.linear).toEqual(['linear-p1']);
+    expect(next.quad).toEqual(['quad-p3']);
+    expect(next.geometry).toEqual([]);
+  });
+
+  it('ignores diagnostic and unknown ids (never tracked)', () => {
+    const next = recordSeenQuestions(emptySeenQuestions(), [
+      { concept: 'linear', questionId: 'linear-d1' }, // diagnostic
+      { concept: 'linear', questionId: 'not-a-real-id' },
+    ]);
+    expect(next.linear).toEqual([]);
+  });
+
+  it('recycles a concept when the seen-set would cover its entire pool', () => {
+    const pool = poolQuestionIds('linear'); // 28 ids
+    const seen = { ...emptySeenQuestions(), linear: pool.slice(0, pool.length - 1) };
+    const last = pool[pool.length - 1];
+    const next = recordSeenQuestions(seen, [{ concept: 'linear', questionId: last }]);
+    // Completing the pool resets to just the freshly-served id.
+    expect(next.linear).toEqual([last]);
+  });
+});
+
+describe('buildFocusedSession', () => {
+  it('returns 4 distinct non-diagnostic questions for the concept', () => {
+    const { queue } = buildFocusedSession(createInitialProgress(), 'ratios');
+    expect(queue).toHaveLength(4);
+    expect(new Set(queue.map((q) => q.questionId)).size).toBe(4);
+    queue.forEach((q) => {
+      expect(q.kind).toBe('main');
+      const question = getQuestionById(q.questionId);
+      expect(question.concept).toBe('ratios');
+      expect(question.diagnostic).toBe(false);
+    });
   });
 });

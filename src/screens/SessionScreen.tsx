@@ -1,29 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader } from '../components/ui';
 import QuestionCard from '../components/QuestionCard';
 import { CONCEPTS } from '../data/concepts';
-import { getQuestion } from '../data/questions';
-import { buildSession, type SessionAnswer } from '../lib/sessionBuilder';
+import { getQuestionById } from '../data/questions';
+import { buildSession, buildFocusedSession, type SessionAnswer } from '../lib/sessionBuilder';
 import { useProgress } from '../context/ProgressContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Session'>;
 
-export default function SessionScreen({ navigation }: Props) {
-  const { progress, completeSession, setPoolIndex } = useProgress();
+export default function SessionScreen({ navigation, route }: Props) {
+  const { progress, completeSession } = useProgress();
+  const focusConcept = route.params?.focusConcept;
 
-  // Build the session queue once, from progress as it was when the
-  // session started. Persist the advanced pool cursors immediately so a
-  // repeat visit (even without finishing) doesn't replay the same
-  // questions.
-  const built = useMemo(() => (progress ? buildSession(progress) : null), [progress]);
-
-  useEffect(() => {
-    if (built) setPoolIndex(built.poolIndex);
+  // Build the session queue once, from progress as it was when the session
+  // started. Served questions are recorded on completion (completeSession),
+  // not on mount — so an abandoned session leaves the pool untouched.
+  const built = useMemo(
+    () =>
+      progress
+        ? focusConcept
+          ? buildFocusedSession(progress, focusConcept)
+          : buildSession(progress)
+        : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    [],
+  );
 
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<SessionAnswer[]>([]);
@@ -38,12 +42,15 @@ export default function SessionScreen({ navigation }: Props) {
 
   const queue = built.queue;
   const item = queue[index];
-  const question = getQuestion(item.concept, item.qi);
+  const question = getQuestionById(item.questionId);
   const total = queue.length;
   const isLast = index === total - 1;
 
   const handleAnswered = (correct: boolean) => {
-    setAnswers((prev) => [...prev, { concept: item.concept, correct, kind: item.kind }]);
+    setAnswers((prev) => [
+      ...prev,
+      { concept: item.concept, questionId: item.questionId, correct, kind: item.kind },
+    ]);
   };
 
   const handleContinue = () => {

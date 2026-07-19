@@ -27,7 +27,8 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   Onboarding: NavigatorScreenParams<OnboardingStackParamList>;
   Main: NavigatorScreenParams<MainTabParamList>;
-  Session: undefined;
+  /** Pass focusConcept to run a single-concept session from LessonScreen. */
+  Session: { focusConcept?: ConceptId } | undefined;
   SessionSummary: {
     delta: number;
     newScore: number;

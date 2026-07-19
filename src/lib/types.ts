@@ -11,8 +11,15 @@ export type MasteryMap = Record<ConceptId, number>;
 /** Session index (1-based) at which each concept was last practiced. 0 = never. */
 export type LastSeenMap = Record<ConceptId, number>;
 
-/** Cursor into each concept's practice-session question pool (indices 1 and 3, cycling). */
+/**
+ * Cursor into each concept's practice-session question pool.
+ * @deprecated Superseded by `seenQuestions` (ID-based). Retained in the
+ * Firestore doc for backward compatibility only — no longer read or advanced.
+ */
 export type PoolIndexMap = Record<ConceptId, number>;
+
+/** Stable IDs of pool questions already served per concept (seen-question tracking). */
+export type SeenQuestionsMap = Record<ConceptId, string[]>;
 
 export interface SessionHistoryEntry {
   /** Session number; 0 = the initial diagnostic. */
@@ -36,6 +43,8 @@ export interface UserProgress {
   actualDate: string | null;
   /** ISO date string ("YYYY-MM-DD") of the user's scheduled SAT, or null. */
   scheduledSAT: string | null;
+  /** Pool question IDs already served per concept, so sessions don't repeat. */
+  seenQuestions: SeenQuestionsMap;
 }
 
 const DEFAULT_MASTERY = 0.3;
@@ -45,6 +54,38 @@ function mapAllConcepts<T>(value: T): Record<ConceptId, T> {
   ALL_CONCEPTS.forEach((c) => {
     result[c] = value;
   });
+  return result;
+}
+
+/**
+ * A fresh `seenQuestions` map with an independent empty array per concept.
+ * (Uses fresh arrays rather than `mapAllConcepts([])`, which would alias one
+ * shared array across all concepts.)
+ */
+export function emptySeenQuestions(): SeenQuestionsMap {
+  const result = {} as SeenQuestionsMap;
+  ALL_CONCEPTS.forEach((c) => {
+    result[c] = [];
+  });
+  return result;
+}
+
+/**
+ * Normalizes a raw Firestore `seenQuestions` value into a complete map:
+ * missing (pre-field docs) or malformed per-concept entries default to `[]`,
+ * so existing users never crash on absent data (F6 / SECURITY-REVIEW A3).
+ */
+export function toSeenQuestions(raw: unknown): SeenQuestionsMap {
+  const result = emptySeenQuestions();
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    ALL_CONCEPTS.forEach((c) => {
+      const value = obj[c];
+      if (Array.isArray(value)) {
+        result[c] = value.filter((id): id is string => typeof id === 'string');
+      }
+    });
+  }
   return result;
 }
 
@@ -65,6 +106,7 @@ export function userDocFields(p: UserProgress): Omit<UserProgress, 'history'> {
     actualScore: p.actualScore,
     actualDate: p.actualDate,
     scheduledSAT: p.scheduledSAT,
+    seenQuestions: p.seenQuestions,
   };
 }
 
@@ -83,5 +125,6 @@ export function createInitialProgress(targetScore = 1200): UserProgress {
     actualScore: null,
     actualDate: null,
     scheduledSAT: null,
+    seenQuestions: emptySeenQuestions(),
   };
 }
