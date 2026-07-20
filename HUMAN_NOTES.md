@@ -209,12 +209,13 @@ reading the CAT/IRT research summary first.
 ### HN-10: Apple Developer account is Individual, not Organization
 **Account**: Swami Sethuraman (Individual), Team ID `9AHMN5N4DL`.
 
-**Why Individual**: Organization enrollment (for AltruistAI branding)
+**Why Individual**: Organization enrollment (for Beneficus AI branding
+— company renamed from AltruistAI in 2026-07 after a name clash)
 requires a D-U-N-S number and Apple verification (days of wait vs.
 minutes for Individual). Since the app is pre-release and internal-only,
 Individual was chosen for speed.
 
-**Future migration path**: If AltruistAI Organization enrollment
+**Future migration path**: If Beneficus AI Organization enrollment
 completes later, re-registering the app under that team is a config
 change (new bundle ID, new App Store Connect listing), NOT a rebuild of
 the codebase. The code is identical; only the EAS/Apple configuration
@@ -222,7 +223,7 @@ changes.
 
 **Bundle ID**: `com.swaminathan.zappysatprep` — tied to Individual
 account. An Organization account would use a different bundle ID (e.g.,
-`com.altruistai.zappysatprep`).
+`com.beneficusai.zappysatprep`).
 
 ---
 
@@ -275,6 +276,48 @@ git state, and a disk failure would have lost both.
    uncommitted work, run `npx tsc --noEmit`, restore the stash.
 3. "Done" claims include a git claim — verified features must also be
    committed. Use the COMMITTED tag below when the distinction matters.
+
+
+---
+
+## Product direction
+
+### HN-13: Generative AI in the student path — the gate comes first
+**Standing rule (2026-07)**: Zappy's currently has ZERO generative AI in
+the student path — questions, lessons, and OPACC coaching are all
+human-authored, pre-computed content. That is a deliberate feature, not a
+gap. No LLM-generated content (questions, explanations, feedback, advice,
+or recommendations) reaches a student without first passing a verification
+gate: answer-key/fact verification, human method review, and calibration
+against real response data. **The catching system gets built before the
+generative feature — never the reverse.** An AI confidently teaching a
+wrong method, or recommending a scholarship with a hallucinated deadline,
+is a false axiom a 16-year-old cannot catch. (Same propose → verify →
+ship discipline as the Claude Code workflow, promoted to a product rule:
+the burden of catching mistakes lives in the system, before the student —
+never with the student.)
+
+**Applications decided so far**:
+- **Scholarship matching** (idea, unbuilt): a verified-and-fresh listings
+  database is the prerequisite; the matching agent comes second. The moat
+  is the verified data, not the algorithm.
+- **AI counselor** (idea, unbuilt): highest-stakes case — advice to
+  minors about consequential decisions, with no cheap automated way to
+  verify advice quality. Fully behind the gate; no timeline.
+- **Social/leaderboards**: if ever built, effort-based and opt-in ONLY —
+  never rank students by scores or projections. Score comparison is
+  anxiety machinery for this audience and inverts the product's
+  compete-with-your-past-self thesis.
+- **Parent visibility**: parent-as-supporter, not surveillance —
+  aggregate effort/trajectory only (sessions, trend, countdown), never
+  per-question detail or live monitoring. v1 is a weekly digest email,
+  not a dashboard. Any cross-user Firestore access is a deliberate
+  security-rules extension (see SECURITY-REVIEW B1–B4), never a casual
+  one.
+- **Equity/schools distribution**: the offline-first OPACC architecture
+  and the web build are the intended path to low-connectivity, low-cost
+  hardware settings (Chromebooks, budget Android). Protect offline
+  viability in future architecture decisions.
 
 ---
 
