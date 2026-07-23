@@ -5,12 +5,13 @@ import { CONCEPTS } from '../data/concepts';
 import { colors, fonts, fontSizes, radii, spacing } from '../theme/colors';
 import { Button } from './ui';
 
-export type QuestionTag = 'warmup' | 'prereq' | 'main' | null;
+export type QuestionTag = 'warmup' | 'prereq' | 'main' | 'retry' | null;
 
 const TAG_LABEL: Record<Exclude<QuestionTag, null>, string> = {
   warmup: '⚡ Warm-up · quick recall',
   prereq: '⚡ Quick refresher',
   main: '⚡ Focus',
+  retry: '⚡ Retry · back for a rematch',
 };
 
 interface Props {
@@ -47,13 +48,14 @@ export default function QuestionCard({
   };
 
   const tagLabel = tag ? TAG_LABEL[tag] : null;
-  const tagConceptSuffix = tag === 'prereq' || tag === 'main' ? ` · ${CONCEPTS[question.concept].short}` : '';
+  const showConceptSuffix = tag === 'prereq' || tag === 'main' || tag === 'retry';
+  const tagConceptSuffix = showConceptSuffix ? ` · ${CONCEPTS[question.concept].short}` : '';
 
   return (
     <View>
       {tagLabel && (
-        <View style={[styles.tag, tag === 'prereq' && styles.tagWarn]}>
-          <Text style={[styles.tagText, tag === 'prereq' && styles.tagTextWarn]}>
+        <View style={[styles.tag, tag === 'prereq' && styles.tagWarn, tag === 'retry' && styles.tagRetry]}>
+          <Text style={[styles.tagText, tag === 'prereq' && styles.tagTextWarn, tag === 'retry' && styles.tagTextRetry]}>
             {tagLabel}
             {tagConceptSuffix}
           </Text>
@@ -118,6 +120,9 @@ const styles = StyleSheet.create({
   tagWarn: {
     borderColor: colors.coral,
   },
+  tagRetry: {
+    borderColor: colors.zap,
+  },
   tagText: {
     fontFamily: fonts.mono,
     fontSize: fontSizes.xs,
@@ -127,6 +132,9 @@ const styles = StyleSheet.create({
   },
   tagTextWarn: {
     color: colors.coral,
+  },
+  tagTextRetry: {
+    color: colors.zap,
   },
   progress: {
     fontFamily: fonts.mono,

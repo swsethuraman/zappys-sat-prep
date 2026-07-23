@@ -3451,3 +3451,9 @@ export function getQuestionById(id: string): Question {
   if (!question) throw new Error(`Unknown question id: ${id}`);
   return question;
 }
+
+/** True only for a known pool (non-diagnostic) question ID; false otherwise. */
+export function isPoolQuestion(id: string): boolean {
+  const question = QUESTION_BY_ID[id];
+  return question ? !question.diagnostic : false;
+}

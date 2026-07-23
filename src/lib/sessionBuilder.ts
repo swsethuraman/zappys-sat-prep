@@ -21,9 +21,15 @@ import {
   updateMastery,
   weakestConcept,
 } from './scoring';
+import { dueRetries, dueRetriesForConcept } from './errorJournal';
 import type { MasteryMap, SeenQuestionsMap, SessionHistoryEntry, UserProgress } from './types';
 
-export type SessionItemKind = 'warmup' | 'prereq' | 'main';
+/** Warm-up slots per session; due retries fill these before WAD material. */
+const WARMUP_SLOTS = 2;
+/** Never surface more than this many retries in a single session. */
+const MAX_RETRIES = 3;
+
+export type SessionItemKind = 'warmup' | 'prereq' | 'main' | 'retry';
 
 export interface SessionQueueItem {
   concept: ConceptId;
@@ -72,8 +78,10 @@ export function selectPoolQuestions(
   count: number,
   seenIds: readonly string[],
   rng: () => number = Math.random,
+  excludeIds: readonly string[] = [],
 ): PoolSelection {
-  const pool = QUESTIONS[concept].filter((q) => !q.diagnostic);
+  const excluded = new Set(excludeIds);
+  const pool = QUESTIONS[concept].filter((q) => !q.diagnostic && !excluded.has(q.id));
   const seen = new Set(seenIds);
   const unseen = pool.filter((q) => !seen.has(q.id));
 
@@ -115,30 +123,33 @@ export function recordSeenQuestions(
 }
 
 /**
- * Assigns distinct pool questions to a list of (concept, kind) slots, drawing
- * from each concept's unseen pool. Multiple slots for the same concept get
- * distinct questions within a single session.
+ * Assigns questions to a list of slots. Slots with a fixed `questionId` (retry
+ * slots) keep it; the rest draw distinct unseen questions from their concept's
+ * pool. `excludeIds` are removed from every draw so a retry is never also
+ * drawn into a normal slot in the same session (FJ1 double-serve guard).
  */
 function assignQuestions(
-  slots: { concept: ConceptId; kind: SessionItemKind }[],
+  slots: { concept: ConceptId; kind: SessionItemKind; questionId?: string }[],
   seen: SeenQuestionsMap,
   rng: () => number = Math.random,
+  excludeIds: readonly string[] = [],
 ): SessionQueueItem[] {
   const need: Partial<Record<ConceptId, number>> = {};
-  slots.forEach(({ concept }) => {
-    need[concept] = (need[concept] ?? 0) + 1;
+  slots.forEach((slot) => {
+    if (!slot.questionId) need[slot.concept] = (need[slot.concept] ?? 0) + 1;
   });
 
   const idsByConcept: Partial<Record<ConceptId, string[]>> = {};
   (Object.keys(need) as ConceptId[]).forEach((concept) => {
-    idsByConcept[concept] = selectPoolQuestions(concept, need[concept] ?? 0, seen[concept] ?? [], rng).ids;
+    idsByConcept[concept] = selectPoolQuestions(concept, need[concept] ?? 0, seen[concept] ?? [], rng, excludeIds).ids;
   });
 
   const cursor: Partial<Record<ConceptId, number>> = {};
-  return slots.map(({ concept, kind }) => {
-    const i = cursor[concept] ?? 0;
-    cursor[concept] = i + 1;
-    return { concept, questionId: (idsByConcept[concept] ?? [])[i], kind };
+  return slots.map((slot) => {
+    if (slot.questionId) return { concept: slot.concept, questionId: slot.questionId, kind: slot.kind };
+    const i = cursor[slot.concept] ?? 0;
+    cursor[slot.concept] = i + 1;
+    return { concept: slot.concept, questionId: (idsByConcept[slot.concept] ?? [])[i], kind: slot.kind };
   });
 }
 
@@ -158,16 +169,30 @@ export function conceptsByRecency(progress: Pick<UserProgress, 'mastery' | 'last
 
 /**
  * Builds the next practice session's question queue:
- *  1. WAD warm-up — 2 questions from the most overdue concepts.
+ *  0. Error-journal retries — up to min(3, warm-up slots) due retries take
+ *     the leading warm-up positions (highest-value retrieval practice). They
+ *     consume warm-up capacity, they don't grow the session.
+ *  1. WAD warm-up — fills any remaining warm-up slots with the most overdue
+ *     concepts (spaced repetition).
  *  2. APDE prerequisite check — if the weakest concept's prerequisite is
  *     also below mastery 0.6 and wasn't already covered by the warm-up,
  *     insert one refresher question on it.
  *  3. Main set — 2 questions on the weakest concept itself.
  */
-export function buildSession(progress: UserProgress, rng: () => number = Math.random): BuiltSession {
-  const slots: { concept: ConceptId; kind: SessionItemKind }[] = [];
+export function buildSession(
+  progress: UserProgress,
+  rng: () => number = Math.random,
+  now: number = Date.now(),
+): BuiltSession {
+  const slots: { concept: ConceptId; kind: SessionItemKind; questionId?: string }[] = [];
 
-  const warmupConcepts = conceptsByRecency(progress).slice(0, 2);
+  // Due retries occupy the warm-up slots first (cap = min(3, warm-up slots)).
+  const retryIds = dueRetries(progress.missedQuestions, now, Math.min(MAX_RETRIES, WARMUP_SLOTS));
+  retryIds.forEach((id) => {
+    slots.push({ concept: progress.missedQuestions[id].concept, kind: 'retry', questionId: id });
+  });
+
+  const warmupConcepts = conceptsByRecency(progress).slice(0, WARMUP_SLOTS - retryIds.length);
   warmupConcepts.forEach((concept) => slots.push({ concept, kind: 'warmup' }));
 
   const target = weakestConcept(progress.mastery);
@@ -179,7 +204,9 @@ export function buildSession(progress: UserProgress, rng: () => number = Math.ra
   slots.push({ concept: target, kind: 'main' });
   slots.push({ concept: target, kind: 'main' });
 
-  return { queue: assignQuestions(slots, progress.seenQuestions, rng) };
+  // Exclude retry IDs from the drawn slots so a retry is never double-served
+  // in the same session (FJ1).
+  return { queue: assignQuestions(slots, progress.seenQuestions, rng, retryIds) };
 }
 
 export interface ProjectedGain {
@@ -359,17 +386,30 @@ export function applySessionResults(progress: UserProgress, answers: SessionAnsw
 }
 
 /**
- * Builds a focused 4-question session targeting a single concept, drawing
- * distinct unseen questions from that concept's pool.
+ * Builds a focused 4-question session targeting a single concept. Due retries
+ * for THAT concept lead the queue (same slot logic as buildSession); the rest
+ * are distinct unseen questions from that concept's pool.
  * Used by LessonScreen's "Practice this topic" button.
  */
 export function buildFocusedSession(
   progress: UserProgress,
   concept: ConceptId,
   rng: () => number = Math.random,
+  now: number = Date.now(),
 ): BuiltSession {
-  const slots = Array.from({ length: 4 }, () => ({ concept, kind: 'main' as const }));
-  return { queue: assignQuestions(slots, progress.seenQuestions, rng) };
+  const FOCUSED_LENGTH = 4;
+  const retryIds = dueRetriesForConcept(
+    progress.missedQuestions,
+    concept,
+    now,
+    Math.min(MAX_RETRIES, FOCUSED_LENGTH),
+  );
+  const slots: { concept: ConceptId; kind: SessionItemKind; questionId?: string }[] = [];
+  retryIds.forEach((id) => slots.push({ concept, kind: 'retry', questionId: id }));
+  for (let i = 0; i < FOCUSED_LENGTH - retryIds.length; i++) {
+    slots.push({ concept, kind: 'main' });
+  }
+  return { queue: assignQuestions(slots, progress.seenQuestions, rng, retryIds) };
 }
 
 // Re-export for screens that only need question lookups alongside session

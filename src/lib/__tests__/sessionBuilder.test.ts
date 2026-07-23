@@ -352,3 +352,71 @@ describe('buildFocusedSession', () => {
     });
   });
 });
+
+describe('error-journal retries in session building', () => {
+  const NOW = Date.UTC(2026, 6, 20, 12, 0, 0);
+  const DAY = 24 * 60 * 60 * 1000;
+  const missed = (concept: 'linear' | 'quad' | 'ratios' | 'geometry', dueMs: number, missCount = 1) => ({
+    concept,
+    missCount,
+    lastMissedAt: new Date(dueMs - DAY).toISOString(),
+    dueAt: new Date(dueMs).toISOString(),
+  });
+
+  it('leads the warm-up with a due retry and never double-serves it (FJ1)', () => {
+    const progress = createInitialProgress();
+    progress.mastery.geometry = 0.05; // target concept (no prereq)
+    progress.missedQuestions = { 'geometry-p1': missed('geometry', NOW - DAY) };
+
+    const { queue } = buildSession(progress, undefined, NOW);
+    expect(queue[0]).toMatchObject({ kind: 'retry', questionId: 'geometry-p1' });
+    // The retry appears exactly once — never redrawn into a main/warm-up slot.
+    expect(queue.filter((q) => q.questionId === 'geometry-p1')).toHaveLength(1);
+  });
+
+  it('retries consume warm-up capacity without growing the session', () => {
+    const base = createInitialProgress();
+    base.mastery.geometry = 0.05;
+    const withoutRetry = buildSession(base, undefined, NOW).queue.length;
+
+    const withRetry = { ...base, missedQuestions: { 'geometry-p1': missed('geometry', NOW - DAY) } };
+    const q = buildSession(withRetry, undefined, NOW).queue;
+    expect(q.length).toBe(withoutRetry); // same length
+    expect(q.filter((i) => i.kind === 'warmup')).toHaveLength(1); // one warm-up displaced
+    expect(q.filter((i) => i.kind === 'retry')).toHaveLength(1);
+  });
+
+  it('does not serve a retry that is not yet due', () => {
+    const progress = createInitialProgress();
+    progress.missedQuestions = { 'linear-p1': missed('linear', NOW + DAY) }; // due tomorrow
+    const { queue } = buildSession(progress, undefined, NOW);
+    expect(queue.some((q) => q.kind === 'retry')).toBe(false);
+    expect(queue.filter((q) => q.kind === 'warmup')).toHaveLength(2);
+  });
+
+  it('caps retries at the warm-up capacity (2), leaving extras for later', () => {
+    const progress = createInitialProgress();
+    progress.missedQuestions = {
+      'linear-p1': missed('linear', NOW - 3 * DAY),
+      'quad-p1': missed('quad', NOW - 2 * DAY),
+      'ratios-p1': missed('ratios', NOW - 1 * DAY),
+    };
+    const retries = buildSession(progress, undefined, NOW).queue.filter((q) => q.kind === 'retry');
+    expect(retries).toHaveLength(2); // only 2 warm-up slots
+    // The two most-overdue (linear, quad) are chosen.
+    expect(retries.map((r) => r.questionId).sort()).toEqual(['linear-p1', 'quad-p1']);
+  });
+
+  it('buildFocusedSession leads with a due retry for that concept only', () => {
+    const progress = createInitialProgress();
+    progress.missedQuestions = {
+      'ratios-p1': missed('ratios', NOW - DAY),
+      'linear-p1': missed('linear', NOW - DAY), // other concept — must be ignored
+    };
+    const { queue } = buildFocusedSession(progress, 'ratios', undefined, NOW);
+    expect(queue).toHaveLength(4);
+    expect(queue[0]).toMatchObject({ kind: 'retry', questionId: 'ratios-p1' });
+    expect(queue.filter((q) => q.questionId === 'ratios-p1')).toHaveLength(1);
+    queue.forEach((q) => expect(getQuestionById(q.questionId).concept).toBe('ratios'));
+  });
+});

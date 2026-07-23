@@ -22,9 +22,12 @@ import {
   recordSeenQuestions,
   type SessionAnswer,
 } from '../lib/sessionBuilder';
+import { updateJournal } from '../lib/errorJournal';
+import { isPoolQuestion } from '../data/questions';
 import type { ConceptId } from '../data/concepts';
 import {
   createInitialProgress,
+  toMissedQuestions,
   toSeenQuestions,
   userDocFields,
   type MasteryMap,
@@ -54,6 +57,9 @@ function progressFromDoc(data: DocumentData): Omit<UserProgress, 'history'> {
     // Pre-field docs won't have `seenQuestions`; default missing/malformed
     // entries to empty per concept so existing users load without error (F6).
     seenQuestions: toSeenQuestions(data['seenQuestions']),
+    // Pre-field docs won't have `missedQuestions`; default absent/malformed
+    // to an empty journal so existing users load without error (FJ3).
+    missedQuestions: toMissedQuestions(data['missedQuestions']),
   };
 }
 
@@ -72,7 +78,7 @@ interface ProgressContextValue {
   isLoading: boolean;
   setTargetScore: (score: number) => void;
   /** Applies diagnostic answers, sets diagnosticDone, and persists. */
-  completeDiagnostic: (answers: { concept: ConceptId; correct: boolean }[]) => void;
+  completeDiagnostic: (answers: { concept: ConceptId; correct: boolean; questionId: string }[]) => void;
   /** Applies session answers, returns the score delta + whether target was just exceeded. */
   completeSession: (answers: SessionAnswer[]) => { delta: number; justExceeded: boolean };
   raiseTarget: (score: number) => void;
@@ -209,8 +215,13 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
         updateDoc(doc(db, 'users', uid), progressToDoc(updated)).catch(() => {});
         const entry = updated.history[0];
         if (entry) {
+          // Instrumentation: log per-question diagnostic responses on the
+          // existing history write (no new write path). Valuable for
+          // item-difficulty calibration; the journal itself stays pool-only.
+          const responses = answers.map((a) => ({ questionId: a.questionId, correct: a.correct }));
           addDoc(collection(db, 'users', uid, 'history'), {
             ...entry,
+            responses,
             createdAt: serverTimestamp(),
           }).catch(() => {});
         }
@@ -220,23 +231,34 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
       completeSession: (answers) => {
         if (!uid || !progress) return { delta: 0, justExceeded: false };
         const { progress: updated, delta, justExceeded } = applySessionResults(progress, answers);
-        // Fold this session's served pool questions into the seen-set once,
-        // here, so it's persisted with the same write as the score/history.
+        // Fold this session's served pool questions into the seen-set AND the
+        // error journal, so both persist in the same write as score/history
+        // (F8 / FJ4). The journal upserts pool misses and clears any question
+        // answered correctly; isPool gates diagnostic/unknown IDs out (FJ2).
         const served = answers.map((a) => ({ concept: a.concept, questionId: a.questionId }));
-        const withSeen = {
+        const results = answers.map((a) => ({
+          questionId: a.questionId,
+          concept: a.concept,
+          correct: a.correct,
+          isPool: isPoolQuestion(a.questionId),
+        }));
+        const withUpdates = {
           ...updated,
           seenQuestions: recordSeenQuestions(updated.seenQuestions, served),
+          missedQuestions: updateJournal(updated.missedQuestions, results, Date.now()),
         };
         // Atomically persist the user doc and the new history entry (F8 / D2).
         const batch = writeBatch(db);
-        batch.update(doc(db, 'users', uid), progressToDoc(withSeen));
-        const entry = withSeen.history[withSeen.history.length - 1];
+        batch.update(doc(db, 'users', uid), progressToDoc(withUpdates));
+        const entry = withUpdates.history[withUpdates.history.length - 1];
         if (entry) {
           const historyRef = doc(collection(db, 'users', uid, 'history'));
-          batch.set(historyRef, { ...entry, createdAt: serverTimestamp() });
+          // Per-question response logging — instrumentation only, no reads.
+          const responses = answers.map((a) => ({ questionId: a.questionId, correct: a.correct }));
+          batch.set(historyRef, { ...entry, responses, createdAt: serverTimestamp() });
         }
         batch.commit().catch(() => {});
-        setHistory(withSeen.history);
+        setHistory(withUpdates.history);
         return { delta, justExceeded };
       },
 

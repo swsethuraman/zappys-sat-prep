@@ -13,6 +13,7 @@ type Props = NativeStackScreenProps<OnboardingStackParamList, 'Diagnostic'>;
 
 interface AnswerRecord {
   concept: DiagnosticQueueItem['concept'];
+  questionId: string;
   correct: boolean;
 }
 
@@ -29,7 +30,7 @@ export default function DiagnosticScreen({ navigation }: Props) {
   const total = queue.length;
 
   const handleAnswered = (correct: boolean) => {
-    setAnswers((prev) => [...prev, { concept: item.concept, correct }]);
+    setAnswers((prev) => [...prev, { concept: item.concept, questionId: item.questionId, correct }]);
   };
 
   const handleContinue = () => {

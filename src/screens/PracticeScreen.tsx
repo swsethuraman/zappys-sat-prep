@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Text, StyleSheet, View } from 'react-native';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -7,6 +7,7 @@ import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader, Card, Eyebrow, Button } from '../components/ui';
 import { projectSessionGain } from '../lib/sessionBuilder';
+import { dueRetries } from '../lib/errorJournal';
 import { useProgress } from '../context/ProgressContext';
 import { colors, fonts, fontSizes, spacing } from '../theme/colors';
 
@@ -17,6 +18,9 @@ type Props = CompositeScreenProps<
 
 export default function PracticeScreen({ navigation }: Props) {
   const { progress } = useProgress();
+  // Capture "now" once on mount — render must stay pure (no Date.now() in the
+  // render body). Good enough for a due-count display that need not tick live.
+  const [now] = useState(() => Date.now());
 
   if (!progress || progress.currentScore === null) {
     return (
@@ -28,6 +32,8 @@ export default function PracticeScreen({ navigation }: Props) {
       </Screen>
     );
   }
+
+  const dueCount = dueRetries(progress.missedQuestions, now, Number.POSITIVE_INFINITY).length;
 
   const proj = projectSessionGain(progress);
   const projLabel =
@@ -47,6 +53,12 @@ export default function PracticeScreen({ navigation }: Props) {
           A short, focused session — warm-up, then your weakest topic. Projected impact:{' '}
           <Text style={styles.projection}>{projLabel} pts</Text>.
         </Text>
+        {dueCount > 0 && (
+          <Text style={styles.retryLine}>
+            ⚡ {dueCount} question{dueCount === 1 ? '' : 's'} back for a rematch — they lead your next
+            session.
+          </Text>
+        )}
         <Button title="Start session ⚡" onPress={() => navigation.navigate('Session')} />
       </Card>
 
@@ -84,6 +96,12 @@ const styles = StyleSheet.create({
   projection: {
     fontFamily: fonts.bodySemiBold,
     color: colors.zap,
+  },
+  retryLine: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: fontSizes.sm,
+    color: colors.zap,
+    marginTop: spacing.sm,
   },
   row: {
     flexDirection: 'row',

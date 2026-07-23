@@ -21,6 +21,23 @@ export type PoolIndexMap = Record<ConceptId, number>;
 /** Stable IDs of pool questions already served per concept (seen-question tracking). */
 export type SeenQuestionsMap = Record<ConceptId, string[]>;
 
+/** A pool question the user missed, tracked for a delayed retry (error journal). */
+export interface MissedQuestion {
+  concept: ConceptId;
+  /** How many times it has been missed (starts at 1). */
+  missCount: number;
+  /** ISO timestamp of the most recent miss. */
+  lastMissedAt: string;
+  /** ISO timestamp the retry becomes due (lastMissedAt + RETRY_DELAY_HOURS). */
+  dueAt: string;
+}
+
+/**
+ * Error journal, keyed by questionId. Naturally size-bounded by the pool
+ * (≤ 224 entries: 8 concepts × 28 pool questions) — no cap logic needed (FJ9).
+ */
+export type MissedQuestionsMap = Record<string, MissedQuestion>;
+
 export interface SessionHistoryEntry {
   /** Session number; 0 = the initial diagnostic. */
   n: number;
@@ -45,6 +62,8 @@ export interface UserProgress {
   scheduledSAT: string | null;
   /** Pool question IDs already served per concept, so sessions don't repeat. */
   seenQuestions: SeenQuestionsMap;
+  /** Missed pool questions awaiting a delayed retry, keyed by questionId. */
+  missedQuestions: MissedQuestionsMap;
 }
 
 const DEFAULT_MASTERY = 0.3;
@@ -90,6 +109,38 @@ export function toSeenQuestions(raw: unknown): SeenQuestionsMap {
 }
 
 /**
+ * Normalizes a raw Firestore `missedQuestions` value into a valid journal:
+ * absent (pre-field docs) → `{}`; malformed entries are dropped rather than
+ * crashing (FJ3). Only entries with a known concept and the expected shape
+ * survive.
+ */
+export function toMissedQuestions(raw: unknown): MissedQuestionsMap {
+  const result: MissedQuestionsMap = {};
+  if (raw && typeof raw === 'object') {
+    const concepts = new Set<string>(ALL_CONCEPTS);
+    Object.entries(raw as Record<string, unknown>).forEach(([id, value]) => {
+      if (!value || typeof value !== 'object') return;
+      const v = value as Record<string, unknown>;
+      if (
+        typeof v['concept'] === 'string' &&
+        concepts.has(v['concept']) &&
+        typeof v['missCount'] === 'number' &&
+        typeof v['lastMissedAt'] === 'string' &&
+        typeof v['dueAt'] === 'string'
+      ) {
+        result[id] = {
+          concept: v['concept'] as ConceptId,
+          missCount: v['missCount'],
+          lastMissedAt: v['lastMissedAt'],
+          dueAt: v['dueAt'],
+        };
+      }
+    });
+  }
+  return result;
+}
+
+/**
  * Returns all UserProgress fields except `history`, ready to write to
  * Firestore (where history lives as a subcollection, not an array field).
  */
@@ -107,6 +158,7 @@ export function userDocFields(p: UserProgress): Omit<UserProgress, 'history'> {
     actualDate: p.actualDate,
     scheduledSAT: p.scheduledSAT,
     seenQuestions: p.seenQuestions,
+    missedQuestions: p.missedQuestions,
   };
 }
 
@@ -126,5 +178,6 @@ export function createInitialProgress(targetScore = 1200): UserProgress {
     actualDate: null,
     scheduledSAT: null,
     seenQuestions: emptySeenQuestions(),
+    missedQuestions: {},
   };
 }
