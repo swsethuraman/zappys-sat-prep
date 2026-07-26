@@ -5,7 +5,7 @@ a decision, a gotcha, or a "why we did it this weird way" that should
 survive across Claude Code sessions. Update when something surprising
 happens or a non-obvious architectural choice is made.
 
-Last updated: 2026-07
+Last updated: 2026-07 (post Reminders v2)
 
 ---
 
@@ -225,6 +225,20 @@ changes.
 account. An Organization account would use a different bundle ID (e.g.,
 `com.beneficusai.zappysatprep`).
 
+**Update (2026-07)**: Beneficus AI is now a registered legal entity.
+D-U-N-S number applied for via Apple's lookup tool (free path; ~5–30
+business days). Chosen migration path: **convert** the existing
+Individual membership to Organization (Apple Developer Support request
+once the D-U-N-S arrives) rather than enrolling a separate new account —
+one membership, credentials and app records carry over, and this
+supersedes the "new bundle ID required" assumption above (conversion can
+keep the existing bundle ID; renaming to `com.beneficusai.*` pre-release
+is still tidier but optional). After conversion, cut a fresh EAS build so
+signatures/profiles show Beneficus AI. Do the conversion BEFORE any App
+Store submission so the seller name is the company, not a person. Play
+Console ($25 one-time), when needed, gets registered under Beneficus from
+day one.
+
 ---
 
 ### HN-11: poolIndex is deprecated — seenQuestions is the pool-selection mechanism
@@ -318,6 +332,126 @@ never with the student.)
   and the web build are the intended path to low-connectivity, low-cost
   hardware settings (Chromebooks, budget Android). Protect offline
   viability in future architecture decisions.
+- **Skilled trades (lateral market, identified 2026-07)**: apprenticeship
+  entry tests and trade licensing exams are the same shape of problem as
+  the SAT (gated exams, weak incumbent prep, math/reading overlap with
+  the existing bank). Entry-aptitude tests are the natural beachhead;
+  licensing exams fragment by state and need trade-expert content
+  authoring. Deep Research landscape pass commissioned; NOTHING gets
+  built until the current SAT queue ships. Named on the vision one-pager
+  as the "beyond college" arc.
+
+---
+
+
+## Distribution & testing
+
+### HN-14: Remote testers need PREVIEW builds, not development builds
+**Why**: a `development`-profile build is a dev-client shell with no
+bundled JS — it requires a live Metro connection (`npx expo start
+--dev-client`) on the same network to run at all. A remote tester
+(Varun) opening a development build sees only the "connect to a
+development server" screen. The `preview` profile bundles the JS
+self-contained: installs and runs standalone. Rule: builds for anyone
+who can't reach your Metro get `--profile preview`.
+
+Related facts learned the hard way:
+- EAS internal-distribution artifacts (the .ipa/.apk files) are deleted
+  after ~30 days; install links die with them. Reinstalls after that
+  need a fresh build. Install pages/links are unlisted-but-unauthenticated
+  (anyone with the link can install; Android has no device-registration
+  gate, unlike iOS) — share privately, fine at 2-tester scale, revisit at
+  beta.
+- Android needs no paid account, no device registration, and no
+  interactive credential steps for sideloaded internal builds — EAS
+  auto-generates and stores the keystore on first build. The $25 Google
+  fee applies only to Play Store distribution, not sideloading.
+- Web deploys via Firebase Hosting (`npx expo export --platform web` →
+  `firebase deploy --only hosting`) are the zero-install tester path;
+  the project's `.web.app` domain is pre-authorized for Firebase Auth.
+  Remember: hosting serves the JS bundled at export time — re-export and
+  re-deploy after every change testers should see.
+
+---
+
+
+### HN-15: firebase.json's default node_modules ignore strips bundled fonts — and dev-web ≠ exported-web
+**Discovered**: First Firebase Hosting deploy (infinite spinner on the
+live site; 511× "Failed to decode downloaded font").
+
+**Root cause**: `firebase init` writes `ignore: ["**/node_modules/**"]`
+into firebase.json — sensible for source dirs, poison for an Expo web
+export, whose dist/ legitimately contains
+`assets/node_modules/@expo-google-fonts/…` TTFs. The ignore stripped
+every font at deploy time; the SPA rewrite then served index.html for
+those URLs; the browser tried to decode HTML as a font; `useFonts`
+never resolved → infinite spinner. **Fix**: that pattern is removed
+from firebase.json — do not re-add it. Plus `useZappyFonts` now
+proceeds after load, error, or a 4s timeout, so the app can never hang
+on fonts again.
+
+**The larger lesson (HN-12's sibling)**: `expo start --web` dev-server
+behavior ≠ the exported bundle. Hosted-web issues must be verified
+against `npx expo export --platform web` output served statically —
+the dev server had been masking this the whole time.
+
+---
+
+### HN-16: Reminders v2 — daily practice anchor + taper, not countdowns
+**Since**: 2026-07 (replaces Phase 5 reminder logic entirely).
+
+**What**: The Phase 5 milestone-countdown notifications (T-14 / T-3 /
+day-of) are GONE. Replaced by (1) a user-chosen daily practice-time
+reminder — `reminderTime: string | null` ("HH:mm", 24h local) on
+`UserProgress` — and (2) one day-before "taper" notification at 19:00
+local the evening before `scheduledSAT` (scheduled only if that evening
+is still ahead).
+
+**Why**: research pass — countdown notifications are anxiety-inducing
+and breed extrinsic dependency (adherence collapses when nudges stop).
+An implementation intention (student picks a routine-anchored time)
+plus a single rest-and-confidence taper message is the evidence-backed
+pattern.
+
+**Field pattern**: `reminderTime` follows HN-11 exactly (types.ts +
+createInitialProgress null + userDocFields + mapper default + a
+`setReminderTime` mutator).
+
+**Scheduling invariant**: cancel-ALL-then-reschedule — on any change to
+`reminderTime` or `scheduledSAT`, and once on native startup
+(idempotent reconciliation), cancel every scheduled notification and
+schedule the current set fresh. The app schedules nothing else, so
+cancel-all also cleared legacy Phase 5 notifications off existing
+devices. Pure trigger/message logic in `src/lib/reminders.ts`
+(injectable clock, tested); OS wiring in `src/lib/notifications.ts`.
+Permission is requested when the user first SETS a time (not on
+launch); denial still saves the time.
+
+---
+
+### HN-17: Dynamic import() of native modules fails on the dev client
+**Discovered**: Reminders v2 device test (red screen on boot).
+
+`const X = await import('expo-notifications')` throws "Requiring
+unknown module" at runtime on the dev client, even though it bundles
+fine for web. Use a STATIC top-level
+`import * as Notifications from 'expo-notifications'` with
+`Platform.OS === 'web'` early-returns around the CALLS (HN-02) —
+importing a native-only module is web-safe; only its APIs are
+native-only. This is the pattern Phase 5 used and the one that's
+device-verified. Applies to any native-only module (notifications,
+view-shot, sharing, etc.). Guard calls, never imports.
+
+---
+
+### HN-18: Daily notification triggers defer to tomorrow if the minute just passed
+**Discovered**: Reminders v2 device test (looked like a non-fire).
+
+An expo-notifications DAILY trigger whose target minute has already
+passed today (even by seconds) correctly schedules for the NEXT day —
+it does not fire moments later. A 1-minute test lead can put the target
+minute effectively in the past and masquerade as a bug. When testing
+daily reminders on-device, set the target 3+ minutes ahead.
 
 ---
 
@@ -347,6 +481,17 @@ always specify what "done" means.
   confirmation)
 
 **As of the 2026-07 repo cleanup:**
+- Error journal (24h delayed retry + response logging): 🌐 WEB-VERIFIED,
+  📦 COMMITTED
+- Reminders v2 (daily anchor + taper): ✅ DEVICE-VERIFIED (notification
+  fired on-device), 🌐 WEB-VERIFIED, 📦 COMMITTED — web REDEPLOY pending
+  so production stops showing the old countdown copy (HN-14 rule)
+- Web app: LIVE on Firebase Hosting (zappys-sat-prep.web.app) post
+  font fix (HN-15); Android preview APK built, link with Varun
+- Taxonomy research verdict received: current 8-concept structure
+  graded structurally misaligned vs the digital SAT blueprint — 4+4
+  domain migration is the next major phase (plan doc forthcoming);
+  College Targets and the stats-widget pilot deliberately wait behind it
 - Question bank merge + seenQuestions: 🌐 WEB-VERIFIED, 📦 COMMITTED
 - Trainer v1 (8 lessons): ✅ DEVICE-VERIFIED (spot-checked), 📦 COMMITTED
   in cleanup — was uncommitted working-tree code until then (HN-12)
