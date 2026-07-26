@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { MainTabParamList } from '../navigation/types';
 import Screen from '../components/Screen';
 import { BrandHeader, Button, Card, Eyebrow } from '../components/ui';
 import { useProgress } from '../context/ProgressContext';
+import { ensureNotificationPermission, isNotificationGranted } from '../lib/notifications';
 import { colors, fonts, fontSizes, radii, spacing } from '../theme/colors';
-import { scheduleReminderNotifications, cancelReminderNotifications } from '../lib/notifications';
 
 // DateTimePicker is native only — import at module level but only render
 // when Platform.OS !== 'web' so the web bundle never instantiates it.
@@ -36,11 +36,51 @@ function toDateString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function toTimeString(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** "HH:mm" → a Date today at that time (for the native time picker's value). */
+function timeToDate(time: string | null): Date {
+  const d = new Date();
+  if (time) {
+    const [h, m] = time.split(':').map(Number);
+    d.setHours(h, m, 0, 0);
+  }
+  return d;
+}
+
+/** "16:30" → "4:30 PM" for display. */
+function formatTime(time: string): string {
+  const [h, m] = time.split(':').map(Number);
+  const period = h < 12 ? 'AM' : 'PM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
 export default function ScheduleScreen(_props: Props) {
-  const { progress, setScheduledSAT } = useProgress();
+  const { progress, setScheduledSAT, setReminderTime } = useProgress();
   const [showPicker, setShowPicker] = useState(false);
   // Web: free-text date entry (YYYY-MM-DD)
   const [webDateText, setWebDateText] = useState(progress?.scheduledSAT ?? '');
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  // Web: free-text time entry (HH:mm)
+  const [webTimeText, setWebTimeText] = useState(progress?.reminderTime ?? '');
+  const [notifDenied, setNotifDenied] = useState(false);
+
+  // Native: surface a gentle note if notification permission is off (FR3).
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let active = true;
+    isNotificationGranted()
+      .then((granted) => {
+        if (active) setNotifDenied(!granted);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   if (!progress) {
     return (
@@ -50,17 +90,17 @@ export default function ScheduleScreen(_props: Props) {
     );
   }
 
-  const { scheduledSAT } = progress;
+  const { scheduledSAT, reminderTime } = progress;
   const days = scheduledSAT ? daysUntil(scheduledSAT) : null;
 
+  // setScheduledSAT reschedules notifications (cancel-all-then-reschedule)
+  // inside the context mutator; the screen no longer schedules directly.
   const saveDate = (dateStr: string) => {
     setScheduledSAT(dateStr);
-    scheduleReminderNotifications(dateStr).catch(() => {});
   };
 
   const clearDate = () => {
     setScheduledSAT(null);
-    cancelReminderNotifications().catch(() => {});
     setWebDateText('');
   };
 
@@ -75,6 +115,34 @@ export default function ScheduleScreen(_props: Props) {
     const trimmed = webDateText.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
       saveDate(trimmed);
+    }
+  };
+
+  // Reminder time: request permission on first set (native), then persist +
+  // reschedule via the context mutator. Saved regardless of the grant (FR3).
+  const saveReminderTime = async (time: string) => {
+    if (Platform.OS !== 'web') {
+      const granted = await ensureNotificationPermission();
+      setNotifDenied(!granted);
+    }
+    setReminderTime(time);
+    setWebTimeText(time);
+  };
+
+  const clearReminder = () => {
+    setReminderTime(null);
+    setWebTimeText('');
+  };
+
+  const onNativeTimeChange = (_event: unknown, selected?: Date) => {
+    setShowTimePicker(false);
+    if (selected) saveReminderTime(toTimeString(selected)).catch(() => {});
+  };
+
+  const onWebTimeSave = () => {
+    const [h, m] = webTimeText.trim().split(':').map(Number);
+    if (Number.isInteger(h) && Number.isInteger(m) && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      saveReminderTime(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`).catch(() => {});
     }
   };
 
@@ -156,23 +224,57 @@ export default function ScheduleScreen(_props: Props) {
         )}
       </Card>
 
-      {/* Reminders */}
+      {/* Daily practice reminder */}
       <Card>
-        <Eyebrow>Reminders</Eyebrow>
-        {Platform.OS === 'web' ? (
-          <Text style={styles.body}>
-            Reminders are available in the mobile app. Download Zappy on your phone to get
-            notifications at 14 days, 3 days, and the morning of your SAT.
-          </Text>
-        ) : scheduledSAT ? (
-          <Text style={styles.body}>
-            Reminders scheduled for 14 days before, 3 days before, and the morning of your SAT.
-          </Text>
-        ) : (
-          <Text style={styles.body}>
-            Set your SAT date above to enable reminders.
-          </Text>
+        <Eyebrow>Daily practice reminder</Eyebrow>
+        <Text style={styles.body}>
+          Pick a time you already have a rhythm around — right after school works great for most
+          students.
+        </Text>
+
+        {reminderTime && (
+          <Text style={styles.reminderTimeLabel}>Reminder set for {formatTime(reminderTime)}</Text>
         )}
+
+        {Platform.OS === 'web' ? (
+          <>
+            <Text style={styles.label}>Enter time (HH:mm, 24-hour)</Text>
+            <TextInput
+              value={webTimeText}
+              onChangeText={setWebTimeText}
+              placeholder="16:00"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              autoCapitalize="none"
+            />
+            <Button title="Save reminder time" onPress={onWebTimeSave} />
+            <Text style={styles.note}>⚡ Reminders fire on the Zappy mobile app.</Text>
+          </>
+        ) : (
+          <>
+            <Button
+              title={reminderTime ? `Change: ${formatTime(reminderTime)}` : 'Pick a time'}
+              variant="ghost"
+              onPress={() => setShowTimePicker(true)}
+            />
+            {showTimePicker && DateTimePicker && (
+              <DateTimePicker
+                value={timeToDate(reminderTime)}
+                mode="time"
+                display="default"
+                onChange={onNativeTimeChange}
+              />
+            )}
+            {notifDenied && reminderTime && (
+              <Text style={styles.note}>
+                Notifications are off — enable them for Zappy in your phone&apos;s settings to get
+                reminders.
+              </Text>
+            )}
+          </>
+        )}
+
+        {reminderTime && <Button title="Clear reminder" variant="ghost" onPress={clearReminder} />}
       </Card>
     </Screen>
   );
@@ -240,5 +342,18 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.md,
     color: colors.text,
     marginBottom: spacing.sm,
+  },
+  reminderTimeLabel: {
+    fontFamily: fonts.display,
+    fontSize: fontSizes.md,
+    color: colors.zap,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  note: {
+    fontFamily: fonts.body,
+    fontSize: fontSizes.sm,
+    color: colors.muted,
+    marginTop: spacing.sm,
   },
 });

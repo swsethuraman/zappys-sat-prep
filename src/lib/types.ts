@@ -60,6 +60,8 @@ export interface UserProgress {
   actualDate: string | null;
   /** ISO date string ("YYYY-MM-DD") of the user's scheduled SAT, or null. */
   scheduledSAT: string | null;
+  /** Daily practice-reminder time ("HH:mm", 24h local time), or null if unset. */
+  reminderTime: string | null;
   /** Pool question IDs already served per concept, so sessions don't repeat. */
   seenQuestions: SeenQuestionsMap;
   /** Missed pool questions awaiting a delayed retry, keyed by questionId. */
@@ -157,6 +159,7 @@ export function userDocFields(p: UserProgress): Omit<UserProgress, 'history'> {
     actualScore: p.actualScore,
     actualDate: p.actualDate,
     scheduledSAT: p.scheduledSAT,
+    reminderTime: p.reminderTime,
     seenQuestions: p.seenQuestions,
     missedQuestions: p.missedQuestions,
   };
@@ -177,6 +180,7 @@ export function createInitialProgress(targetScore = 1200): UserProgress {
     actualScore: null,
     actualDate: null,
     scheduledSAT: null,
+    reminderTime: null,
     seenQuestions: emptySeenQuestions(),
     missedQuestions: {},
   };

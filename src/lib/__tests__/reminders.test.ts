@@ -1,58 +1,94 @@
-import { computeReminderDates } from '../reminders';
+import {
+  REMINDER_MESSAGES,
+  TAPER_HOUR,
+  TAPER_MESSAGE,
+  dailyMessage,
+  dailyTrigger,
+  taperTrigger,
+} from '../reminders';
 
-describe('computeReminderDates', () => {
-  const SAT_DATE = '2026-10-03'; // A Saturday
+// Local-time ms helper so taper tests are timezone-independent (both `now`
+// and the taper Date are built in local time).
+const localMs = (y: number, mo: number, d: number, h = 0, min = 0) =>
+  new Date(y, mo - 1, d, h, min, 0, 0).getTime();
 
-  it('returns exactly three reminders', () => {
-    expect(computeReminderDates(SAT_DATE)).toHaveLength(3);
+describe('dailyTrigger', () => {
+  it('parses a valid HH:mm into hour/minute', () => {
+    expect(dailyTrigger('16:30')).toEqual({ hour: 16, minute: 30 });
+    expect(dailyTrigger('09:05')).toEqual({ hour: 9, minute: 5 });
+    expect(dailyTrigger('00:00')).toEqual({ hour: 0, minute: 0 });
+    expect(dailyTrigger('23:59')).toEqual({ hour: 23, minute: 59 });
   });
 
-  it('first reminder fires 14 days before the SAT at 09:00', () => {
-    const [r] = computeReminderDates(SAT_DATE);
-    expect(r.date.getFullYear()).toBe(2026);
-    expect(r.date.getMonth()).toBe(8); // September (0-indexed)
-    expect(r.date.getDate()).toBe(19); // Oct 3 - 14 = Sep 19
-    expect(r.date.getHours()).toBe(9);
-    expect(r.date.getMinutes()).toBe(0);
+  it('returns null for unset or malformed values', () => {
+    expect(dailyTrigger(null)).toBeNull();
+    expect(dailyTrigger('')).toBeNull();
+    expect(dailyTrigger('25:00')).toBeNull();
+    expect(dailyTrigger('16:60')).toBeNull();
+    expect(dailyTrigger('abc')).toBeNull();
+    expect(dailyTrigger('1630')).toBeNull();
+  });
+});
+
+describe('taperTrigger', () => {
+  it('returns null when no date is set', () => {
+    expect(taperTrigger(null, localMs(2026, 6, 1))).toBeNull();
   });
 
-  it('second reminder fires 3 days before the SAT at 09:00', () => {
-    const [, r] = computeReminderDates(SAT_DATE);
-    expect(r.date.getMonth()).toBe(8); // September
-    expect(r.date.getDate()).toBe(30); // Oct 3 - 3 = Sep 30
-    expect(r.date.getHours()).toBe(9);
+  it('fires at TAPER_HOUR the evening before a future SAT', () => {
+    const taper = taperTrigger('2026-10-03', localMs(2026, 1, 1));
+    expect(taper).not.toBeNull();
+    expect(taper!.getFullYear()).toBe(2026);
+    expect(taper!.getMonth()).toBe(9); // October (0-indexed)
+    expect(taper!.getDate()).toBe(2); // evening before Oct 3
+    expect(taper!.getHours()).toBe(TAPER_HOUR);
+    expect(taper!.getMinutes()).toBe(0);
   });
 
-  it('third reminder fires on the SAT morning at 09:00', () => {
-    const [, , r] = computeReminderDates(SAT_DATE);
-    expect(r.date.getFullYear()).toBe(2026);
-    expect(r.date.getMonth()).toBe(9); // October (0-indexed)
-    expect(r.date.getDate()).toBe(3);
-    expect(r.date.getHours()).toBe(9);
+  it('returns null for a past SAT date', () => {
+    expect(taperTrigger('2020-01-01', localMs(2026, 6, 1))).toBeNull();
   });
 
-  it('all reminders have non-empty title and body', () => {
-    computeReminderDates(SAT_DATE).forEach((r) => {
-      expect(r.title.length).toBeGreaterThan(0);
-      expect(r.body.length).toBeGreaterThan(0);
-    });
+  it('returns null on the day of the SAT (taper evening already passed)', () => {
+    expect(taperTrigger('2026-10-03', localMs(2026, 10, 3, 8))).toBeNull();
   });
 
-  it('reminders are in ascending chronological order', () => {
-    const dates = computeReminderDates(SAT_DATE).map((r) => r.date.getTime());
-    expect(dates[0]).toBeLessThan(dates[1]);
-    expect(dates[1]).toBeLessThan(dates[2]);
+  it('schedules tonight when the SAT is tomorrow and it is before 7pm', () => {
+    const taper = taperTrigger('2026-10-02', localMs(2026, 10, 1, 12));
+    expect(taper).not.toBeNull();
+    expect(taper!.getDate()).toBe(1);
+    expect(taper!.getHours()).toBe(TAPER_HOUR);
   });
 
-  it('handles year boundary correctly (SAT on Jan 5)', () => {
-    const reminders = computeReminderDates('2027-01-05');
-    const [t14, t3, t0] = reminders;
-    expect(t14.date.getFullYear()).toBe(2026);
-    expect(t14.date.getMonth()).toBe(11); // December
-    expect(t14.date.getDate()).toBe(22);
-    expect(t3.date.getFullYear()).toBe(2027);
-    expect(t3.date.getMonth()).toBe(0); // January
-    expect(t3.date.getDate()).toBe(2);
-    expect(t0.date.getDate()).toBe(5);
+  it('returns null when the SAT is tomorrow but 7pm tonight already passed', () => {
+    expect(taperTrigger('2026-10-02', localMs(2026, 10, 1, 20))).toBeNull();
+  });
+});
+
+describe('dailyMessage', () => {
+  it('is deterministic for a given day and keys off day-of-month', () => {
+    // day-of-month 7 -> index 7 % length
+    const now = localMs(2026, 6, 7, 16);
+    expect(dailyMessage(now)).toBe(REMINDER_MESSAGES[7 % REMINDER_MESSAGES.length]);
+    // same day -> same message
+    expect(dailyMessage(now)).toBe(dailyMessage(localMs(2026, 6, 7, 9)));
+  });
+
+  it('always returns a message from the list', () => {
+    for (let d = 1; d <= 31; d++) {
+      expect(REMINDER_MESSAGES).toContain(dailyMessage(localMs(2026, 5, d, 10)));
+    }
+  });
+});
+
+describe('message constants', () => {
+  it('has 5-8 non-empty daily messages', () => {
+    expect(REMINDER_MESSAGES.length).toBeGreaterThanOrEqual(5);
+    expect(REMINDER_MESSAGES.length).toBeLessThanOrEqual(8);
+    REMINDER_MESSAGES.forEach((m) => expect(m.length).toBeGreaterThan(0));
+  });
+
+  it('has a non-empty taper message', () => {
+    expect(TAPER_MESSAGE.length).toBeGreaterThan(0);
   });
 });

@@ -23,6 +23,7 @@ import {
   type SessionAnswer,
 } from '../lib/sessionBuilder';
 import { updateJournal } from '../lib/errorJournal';
+import { rescheduleAllReminders } from '../lib/notifications';
 import { isPoolQuestion } from '../data/questions';
 import type { ConceptId } from '../data/concepts';
 import {
@@ -54,6 +55,8 @@ function progressFromDoc(data: DocumentData): Omit<UserProgress, 'history'> {
     actualScore: (data['actualScore'] ?? null) as number | null,
     actualDate: (data['actualDate'] ?? null) as string | null,
     scheduledSAT: (data['scheduledSAT'] ?? null) as string | null,
+    // Pre-field docs won't have `reminderTime`; default absent → null (FR5).
+    reminderTime: (data['reminderTime'] ?? null) as string | null,
     // Pre-field docs won't have `seenQuestions`; default missing/malformed
     // entries to empty per concept so existing users load without error (F6).
     seenQuestions: toSeenQuestions(data['seenQuestions']),
@@ -84,6 +87,8 @@ interface ProgressContextValue {
   raiseTarget: (score: number) => void;
   setActualScore: (score: number, date: string) => void;
   setScheduledSAT: (date: string | null) => void;
+  /** Sets (or clears with null) the daily practice-reminder time ("HH:mm"). */
+  setReminderTime: (time: string | null) => void;
   /** Wipes all progress and starts over (Profile screen "Reset Zappy"). */
   reset: () => void;
 }
@@ -280,11 +285,25 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
       },
 
       setScheduledSAT: (date) => {
-        if (!uid) return;
+        if (!uid || !progress) return;
         updateDoc(doc(db, 'users', uid), {
           scheduledSAT: date,
           updatedAt: serverTimestamp(),
         }).catch(() => {});
+        // Cancel-all-then-reschedule from the just-updated state (FR1); native
+        // only. Keeps the daily reminder, refreshes the taper for the new date.
+        rescheduleAllReminders({ ...progress, scheduledSAT: date }).catch(() => {});
+      },
+
+      setReminderTime: (time) => {
+        if (!uid || !progress) return;
+        updateDoc(doc(db, 'users', uid), {
+          reminderTime: time,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+        // Cancel-all-then-reschedule from the just-updated state (FR1); native
+        // only. Keeps the taper, refreshes the daily reminder for the new time.
+        rescheduleAllReminders({ ...progress, reminderTime: time }).catch(() => {});
       },
 
       reset: () => {
