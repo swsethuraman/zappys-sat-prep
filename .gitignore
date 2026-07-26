@@ -41,3 +41,5 @@ yarn-error.*
 /android
 
 .firebase/
+
+desktop.ini
